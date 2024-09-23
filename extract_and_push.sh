@@ -47,9 +47,10 @@ sendTG_edit_wrapper() {
 # 1st arg should be either 1 ( error ) or 0 ( success )
 terminate() {
     if [[ ${1:?} == "0" ]]; then
-        local string="Done"
+        local string="Done (<a href=\"${BUILD_URL}\">#${BUILD_ID}</a>)"
     else
-        local string="Failed!"
+        local string="Failed! (<a href=\"${BUILD_URL}\">\"#${BUILD_ID}\"</a>)
+View <a href=\"${BUILD_URL}consoleText\">console logs</a> for more."
     fi
     sendTG reply "${MESSAGE_ID}" "Job ${string}"
     exit "${1:?}"
