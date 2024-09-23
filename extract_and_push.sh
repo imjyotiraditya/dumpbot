@@ -56,6 +56,18 @@ View <a href=\"${BUILD_URL}consoleText\">console logs</a> for more."
     exit "${1:?}"
 }
 
+checkBranch() {
+    # Request for branch information
+    branch_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects/$project_id/repository/branches/$branch")"
+
+    # Terminate if branch is already present on GitLab
+    [[ "$(jq -r '.name' -e <<< "${branch_json}")" == "$branch" ]] && {
+        echo "$branch already exists in $repo"
+        sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>$branch already exists in</code> <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">$repo</a>!" > /dev/null
+        terminate 0
+    }
+}
+
 # https://github.com/dylanaraps/pure-bash-bible#percent-encode-a-string
 urlEncode() {
     declare LC_ALL=C
@@ -458,7 +470,26 @@ sort -u -o ./board-info.txt ./board-info.txt
 # Prop extraction
 sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>Extracting props..</code>" > /dev/null
 
+# Scrape for description first, in order to fail as soon as possible
+# in case this is a duplicated build.
 oplus_pipeline_key=$(grep -m1 -oP "(?<=^ro.oplus.pipeline_key=).*" -hs my_manifest/build*.prop)
+description=$(grep -m1 -oP "(?<=^ro.build.description=).*" -hs {system,system/system}/build.prop)
+[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.build.description=).*" -hs {system,system/system}/build*.prop)
+[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.vendor.build.description=).*" -hs vendor/build.prop)
+[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.vendor.build.description=).*" -hs vendor/build*.prop)
+[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.product.build.description=).*" -hs product/build.prop)
+[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.product.build.description=).*" -hs product/build*.prop)
+[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.system.build.description=).*" -hs {system,system/system}/build*.prop)
+[[ -z ${description} ]] && description="$flavor $release $id $incremental $tags"
+
+if [ -z "$oplus_pipeline_key" ];then
+    branch=$(echo "$description" | head -1 | tr ' ' '-')
+else
+    branch=$(echo "$description"--"$oplus_pipeline_key" | head -1 | tr ' ' '-')
+fi
+
+## Check if branch with same description has been pushed before
+checkBranch
 
 flavor=$(grep -m1 -oP "(?<=^ro.build.flavor=).*" -hs {vendor,system,system/system}/build.prop)
 [[ -z ${flavor} ]] && flavor=$(grep -m1 -oP "(?<=^ro.vendor.build.flavor=).*" -hs vendor/build*.prop)
@@ -601,26 +632,11 @@ brand=$(grep -m1 -oP "(?<=^ro.product.odm.brand=).*" -hs odm/etc/${codename}_bui
 [[ -z ${brand} ]] && brand=$(grep -m1 -oP "(?<=^ro.product.brand=).*" -hs {oppo_product,my_product}/build*.prop | head -1)
 [[ -z ${brand} ]] && brand=$(echo "$fingerprint" | cut -d / -f1)
 
-description=$(grep -m1 -oP "(?<=^ro.build.description=).*" -hs {system,system/system}/build.prop)
-[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.build.description=).*" -hs {system,system/system}/build*.prop)
-[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.vendor.build.description=).*" -hs vendor/build.prop)
-[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.vendor.build.description=).*" -hs vendor/build*.prop)
-[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.product.build.description=).*" -hs product/build.prop)
-[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.product.build.description=).*" -hs product/build*.prop)
-[[ -z ${description} ]] && description=$(grep -m1 -oP "(?<=^ro.system.build.description=).*" -hs {system,system/system}/build*.prop)
-[[ -z ${description} ]] && description="$flavor $release $id $incremental $tags"
-
 is_ab=$(grep -m1 -oP "(?<=^ro.build.ab_update=).*" -hs {system,system/system,vendor}/build*.prop)
 is_ab=$(echo "$is_ab" | head -1)
 [[ -z ${is_ab} ]] && is_ab="false"
 
 codename=$(echo "$codename" | tr ' ' '_')
-
-if [ -z "$oplus_pipeline_key" ];then
-    branch=$(echo "$description" | head -1 | tr ' ' '-')
-else
-    branch=$(echo "$description"--"$oplus_pipeline_key" | head -1 | tr ' ' '-')
-fi
 
 repo_subgroup=$(echo "$brand" | tr '[:upper:]' '[:lower:]')
 [[ -z $repo_subgroup ]] && repo_subgroup=$(echo "$manufacturer" | tr '[:upper:]' '[:lower:]')
@@ -687,13 +703,6 @@ if ! project_id="$(jq .id -e <<< "${project_id_json}")"; then
         terminate 1
     fi
 fi
-
-branch_json="$(curl --compressed -sH "Authorization: bearer ${DUMPER_TOKEN}" "https://$GITLAB_SERVER/api/v4/projects/$project_id/repository/branches/$branch")"
-[[ "$(jq -r '.name' -e <<< "${branch_json}")" == "$branch" ]] && {
-    echo "$branch already exists in $repo"
-    sendTG_edit_wrapper permanent "${MESSAGE_ID}" "${MESSAGE}"$'\n'"<code>$branch already exists in</code> <a href=\"https://$GITLAB_SERVER/$ORG/$repo/tree/$branch/\">$repo</a>!" > /dev/null
-    terminate 0
-}
 
 # Add, commit, and push after filtering out certain files
 git init --initial-branch "$branch"
